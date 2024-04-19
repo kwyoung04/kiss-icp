@@ -5,6 +5,13 @@ wheelhouse/
 _skbuild/
 .gitlab-ci-local/
 
+
+# dataset
+*.ply
+*.json
+*.png
+auto_test/
+
 # Created by https://www.toptal.com/developers/gitignore/api/python,c++
 # Edit at https://www.toptal.com/developers/gitignore?templates=python,c++
 ### C++ ###

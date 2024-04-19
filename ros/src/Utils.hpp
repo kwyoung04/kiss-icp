@@ -27,22 +27,68 @@
 #include <cstddef>
 #include <memory>
 #include <regex>
+#include <sophus/se3.hpp>
 #include <string>
 #include <vector>
 
-#include "sensor_msgs/PointCloud2.h"
-#include "sensor_msgs/point_cloud2_iterator.h"
+// ROS 2
+#include <geometry_msgs/msg/pose.hpp>
+#include <geometry_msgs/msg/transform.hpp>
+#include <geometry_msgs/msg/transform_stamped.hpp>
+#include <sensor_msgs/msg/point_cloud2.hpp>
+#include <sensor_msgs/point_cloud2_iterator.hpp>
+
+namespace tf2 {
+
+inline geometry_msgs::msg::Transform sophusToTransform(const Sophus::SE3d &T) {
+    geometry_msgs::msg::Transform t;
+    t.translation.x = T.translation().x();
+    t.translation.y = T.translation().y();
+    t.translation.z = T.translation().z();
+
+    Eigen::Quaterniond q(T.so3().unit_quaternion());
+    t.rotation.x = q.x();
+    t.rotation.y = q.y();
+    t.rotation.z = q.z();
+    t.rotation.w = q.w();
+
+    return t;
+}
+
+inline geometry_msgs::msg::Pose sophusToPose(const Sophus::SE3d &T) {
+    geometry_msgs::msg::Pose t;
+    t.position.x = T.translation().x();
+    t.position.y = T.translation().y();
+    t.position.z = T.translation().z();
+
+    Eigen::Quaterniond q(T.so3().unit_quaternion());
+    t.orientation.x = q.x();
+    t.orientation.y = q.y();
+    t.orientation.z = q.z();
+    t.orientation.w = q.w();
+
+    return t;
+}
+
+inline Sophus::SE3d transformToSophus(const geometry_msgs::msg::TransformStamped &transform) {
+    const auto &t = transform.transform;
+    return Sophus::SE3d(
+        Sophus::SE3d::QuaternionType(t.rotation.w, t.rotation.x, t.rotation.y, t.rotation.z),
+        Sophus::SE3d::Point(t.translation.x, t.translation.y, t.translation.z));
+}
+}  // namespace tf2
 
 namespace kiss_icp_ros::utils {
-using PointCloud2 = sensor_msgs::PointCloud2;
-using PointField = sensor_msgs::PointField;
-using Header = std_msgs::Header;
+
+using PointCloud2 = sensor_msgs::msg::PointCloud2;
+using PointField = sensor_msgs::msg::PointField;
+using Header = std_msgs::msg::Header;
 
 inline std::string FixFrameId(const std::string &frame_id) {
     return std::regex_replace(frame_id, std::regex("^/"), "");
 }
 
-inline auto GetTimestampField(const PointCloud2::ConstPtr msg) {
+inline auto GetTimestampField(const PointCloud2::ConstSharedPtr msg) {
     PointField timestamp_field;
     for (const auto &field : msg->fields) {
         if ((field.name == "t" || field.name == "timestamp" || field.name == "time")) {
@@ -69,7 +115,8 @@ inline auto NormalizeTimestamps(const std::vector<double> &timestamps) {
     return timestamps_normalized;
 }
 
-inline auto ExtractTimestampsFromMsg(const PointCloud2::ConstPtr msg, const PointField &field) {
+inline auto ExtractTimestampsFromMsg(const PointCloud2::ConstSharedPtr msg,
+                                     const PointField &field) {
     auto extract_timestamps =
         [&msg]<typename T>(sensor_msgs::PointCloud2ConstIterator<T> &&it) -> std::vector<double> {
         const size_t n_points = msg->height * msg->width;
@@ -142,7 +189,7 @@ inline void FillPointCloud2Timestamp(const std::vector<double> &timestamps, Poin
     for (size_t i = 0; i < timestamps.size(); i++, ++msg_t) *msg_t = timestamps[i];
 }
 
-inline std::vector<double> GetTimestamps(const PointCloud2::ConstPtr msg) {
+inline std::vector<double> GetTimestamps(const PointCloud2::ConstSharedPtr msg) {
     auto timestamp_field = GetTimestampField(msg);
 
     // Extract timestamps from cloud_msg
@@ -151,7 +198,7 @@ inline std::vector<double> GetTimestamps(const PointCloud2::ConstPtr msg) {
     return timestamps;
 }
 
-inline std::vector<Eigen::Vector3d> PointCloud2ToEigen(const PointCloud2::ConstPtr msg) {
+inline std::vector<Eigen::Vector3d> PointCloud2ToEigen(const PointCloud2::ConstSharedPtr msg) {
     std::vector<Eigen::Vector3d> points;
     points.reserve(msg->height * msg->width);
     sensor_msgs::PointCloud2ConstIterator<float> msg_x(*msg, "x");
@@ -171,6 +218,16 @@ inline std::unique_ptr<PointCloud2> EigenToPointCloud2(const std::vector<Eigen::
 }
 
 inline std::unique_ptr<PointCloud2> EigenToPointCloud2(const std::vector<Eigen::Vector3d> &points,
+                                                       const Sophus::SE3d &T,
+                                                       const Header &header) {
+    std::vector<Eigen::Vector3d> points_t;
+    points_t.resize(points.size());
+    std::transform(points.cbegin(), points.cend(), points_t.begin(),
+                   [&](const auto &point) { return T * point; });
+    return EigenToPointCloud2(points_t, header);
+}
+
+inline std::unique_ptr<PointCloud2> EigenToPointCloud2(const std::vector<Eigen::Vector3d> &points,
                                                        const std::vector<double> &timestamps,
                                                        const Header &header) {
     auto msg = CreatePointCloud2Msg(points.size(), header, true);
@@ -178,5 +235,4 @@ inline std::unique_ptr<PointCloud2> EigenToPointCloud2(const std::vector<Eigen::
     FillPointCloud2Timestamp(timestamps, *msg);
     return msg;
 }
-
 }  // namespace kiss_icp_ros::utils

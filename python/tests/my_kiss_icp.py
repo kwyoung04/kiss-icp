@@ -26,9 +26,10 @@ from kiss_icp.config import KISSConfig
 from kiss_icp.deskew import get_motion_compensator
 from kiss_icp.mapping import get_voxel_hash_map
 from kiss_icp.preprocess import get_preprocessor
-from kiss_icp.registration import get_registration
+from kiss_icp.registration import register_frame
 from kiss_icp.threshold import get_threshold_estimator
 from kiss_icp.voxelization import voxel_down_sample
+import open3d as o3d
 
 
 class KissICP:
@@ -37,36 +38,37 @@ class KissICP:
         self.config = config
         self.compensator = get_motion_compensator(config)
         self.adaptive_threshold = get_threshold_estimator(self.config)
-        self.registration = get_registration(self.config)
         self.local_map = get_voxel_hash_map(self.config)
         self.preprocess = get_preprocessor(self.config)
 
-    def register_frame(self, frame, timestamps):
-        # Apply motion compensation
-        frame = self.compensator.deskew_scan(frame, self.poses, timestamps)
-
-        # Preprocess the input cloud
-        frame = self.preprocess(frame)
-
+    def register_frame(self, frame):
         # Voxelize
         source, frame_downsample = self.voxelize(frame)
 
         # Get motion prediction and adaptive_threshold
-        sigma = self.get_adaptive_threshold()
-
-        # Compute initial_guess for ICP
-        prediction = self.get_prediction_model()
-        last_pose = self.poses[-1] if self.poses else np.eye(4)
-        initial_guess = last_pose @ prediction
-
-        # Run ICP
-        new_pose = self.registration.align_points_to_map(
+        #sigma = self.get_adaptive_threshold()
+        sigma = 0.001
+        
+        initial_guess = np.identity(4)
+        #initial_guess = pose
+                
+        # Run KISS ICP
+        new_pose = register_frame(
             points=source,
             voxel_map=self.local_map,
             initial_guess=initial_guess,
-            max_correspondance_distance=3 * sigma,
-            kernel=sigma / 3,
+            max_correspondance_distance=0.003 * sigma,
+            kernel=sigma / 30
         )
+        
+        
+
+        #new_pose = initial_guess
+        
+        #check_matrix = np.linalg.inv(initial_guess) @ new_pose
+        #modified_matrix = np.where(np.abs(check_matrix) < 0.0001, np.round(check_matrix), check_matrix)
+        #print(initial_guess)
+        print(new_pose)
 
         self.adaptive_threshold.update_model_deviation(np.linalg.inv(initial_guess) @ new_pose)
         self.local_map.update(frame_downsample, new_pose)
